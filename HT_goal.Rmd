@@ -1,0 +1,247 @@
+---
+title: "Impact of Late First-Half Goals on Match Outcomes"
+author: ""
+date: "2025-12-01"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    extra_dependencies:
+      fontspec: null
+mainfont: Arial
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(nnet)
+library(lubridate)
+```
+
+1.  Data Loading and Initial Inspection We begin by loading the raw
+    dataset events.csv. This step includes error handling to ensure the
+    file exists and inspecting the raw structure of the data (column
+    types, missing values) to determine necessary cleaning steps.
+
+```{r}
+# Load data; file name is 'events.csv'
+tryCatch({
+  df <- readr::read_csv("events.csv")
+  print("Data loaded successfully.")
+}, error = function(e) {
+  print("Error: Could not load the file.")
+  df <- NULL
+})
+
+# Missing Value Check
+na_counts <- colSums(is.na(df))
+na_counts_df <- data.frame(
+  Variable = names(na_counts),
+  Missing_Count = na_counts,
+  Missing_Percentage = round((na_counts / nrow(df)) * 100, 2)
+)
+print(head(na_counts_df[na_counts_df$Missing_Count > 0, ]))
+```
+
+2.  Data Cleaning and Type Conversion The raw data imports columns as
+    characters or generic types. Here, we convert scores and periods to
+    numeric types and parse the EventName to separate the competing
+    teams. We also ensure the EventDate is properly formatted for any
+    time-series analysis.
+
+```{r}
+df_clean <- df %>%
+  mutate(
+    Score1 = as.numeric(Score1),
+    Score2 = as.numeric(Score2),
+    Period1 = as.numeric(Period1), # Goals scored in the 1st half
+    Period2 = as.numeric(Period2), # Goals scored in the 2nd half
+    FirstGoalTeam = as.numeric(FirstGoalTeam),
+    FirstGoalMinute = as.numeric(FirstGoalMinute)
+  ) %>%
+  separate(
+    col = EventName,
+    into = c("HomeTeam", "AwayTeam"),
+    sep = " - ",
+    remove = FALSE,
+    extra = "merge" 
+  ) %>%
+  mutate(
+    EventDate = lubridate::ymd_hms(EventDate)
+  )
+
+cat("Cleaned dataframe dimensions:", dim(df_clean))
+```
+
+3.  Feature Engineering: Identifying Late Goals We define a "Late
+    First-Half Goal" as a goal scored between the 41st and 50th minute
+    (inclusive of stoppage time).
+
+```{r}
+# Function to check for a late first-half goal (41st min up to 50th min)
+check_late_goal <- function(goal_minutes_string) {
+  if (is.na(goal_minutes_string) || goal_minutes_string == "NULL") {
+    return(0)
+  }
+
+  # Split multiple goals by comma
+  raw_tokens <- unlist(strsplit(goal_minutes_string, ","))
+  
+  # Helper to parse "45+2" into 47
+  parse_minute <- function(x) {
+    if (grepl("\\+", x)) {
+      parts <- as.numeric(unlist(strsplit(x, "\\+")))
+      return(sum(parts))
+    } else {
+      return(as.numeric(x))
+    }
+  }
+  
+  minutes <- suppressWarnings(sapply(raw_tokens, parse_minute))
+
+  # Check range
+  if (any(minutes >= 41 & minutes <= 50, na.rm = TRUE)) {
+    return(1) 
+  } else {
+    return(0) 
+  }
+}
+
+df_features <- df_clean %>%
+  rowwise() %>%
+  mutate(
+    LateFH_Goal_Scored = check_late_goal(Team1GoalMinutes),
+    LateFH_Goal_Conceded = check_late_goal(Team2GoalMinutes)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Match_Outcome = case_when(
+      Score1 > Score2 ~ "Win",
+      Score1 < Score2 ~ "Loss",
+      Score1 == Score2 ~ "Draw",
+      TRUE ~ NA_character_
+    ),
+    Match_Outcome = factor(Match_Outcome, levels = c("Draw", "Win", "Loss"))
+  )
+```
+
+4.  Filtering for Top 5 Leagues To ensure consistency in competition
+    level, we filter the dataset to include only matches from the "Top
+    5" European leagues. We handle multi-language variations (English
+    and Russian/Cyrillic) commonly found in data scrapers.
+
+```{r}
+# Filtering data
+top_5_leagues_variants <- c(
+    "Premier League", "Премьер-Лига",
+    "Primera Division", "Примера", "Примера Дивизион",
+    "Серия А", "Serie A",
+    "Bundesliga", "Бундеслига",
+    "Ligue 1", "Лига 1"
+)
+
+df_filtered <- df_features %>%
+  filter(ChampionshipSubGroupName %in% top_5_leagues_variants) %>%
+  mutate(
+    Standard_League_Name = case_when(
+      ChampionshipSubGroupName %in% c("Premier League", "Премьер-Лига") ~ "Premier League",
+      ChampionshipSubGroupName %in% c("Primera Division", "Примера", "Примера Дивизион") ~ "La Liga",
+      ChampionshipSubGroupName %in% c("Серия А", "Serie A") ~ "Serie A",
+      ChampionshipSubGroupName %in% c("Bundesliga", "Бундеслига") ~ "Bundesliga",
+      ChampionshipSubGroupName %in% c("Ligue 1", "Лига 1") ~ "Ligue 1",
+      TRUE ~ "Other"
+    ),
+    Standard_League_Name = factor(Standard_League_Name)
+  )
+
+cat("Matches remaining after filtering:", nrow(df_filtered))
+```
+
+5.  Visual Analysis Before modeling, we visualize the data to understand
+    the distribution of outcomes and the prevalence of late goals.
+
+Distribution of Match Outcomes by League
+
+```{r}
+ggplot(df_filtered, aes(x = Standard_League_Name, fill = Match_Outcome)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Match Outcome Distribution by League",
+    y = "Percentage",
+    x = "League",
+    fill = "Home Outcome"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+6.  Statistical Modeling (Multinomial Regression) We use Multinomial
+    Logistic Regression to model the probability of a Win, Loss, or
+    Draw.
+
+Model Note: We use the Home Team perspective for modeling. We do not
+duplicate the data (flipping to add Away rows) because this would
+violate the statistical assumption of independence (a Home Win
+guarantees an Away Loss in the same match).
+
+Variables:
+
+Late Goal Scored: Did the home team score in the 41-50 min window?
+
+Late Goal Conceded: Did the away team score in that window?
+
+Halftime Goals: Control variable for the current state of the match.
+
+League: Control variable for league-specific trends.
+
+```{r}
+# We use the Home Team perspective (df_filtered) directly
+# Rename cols for clarity in the model output
+df_model <- df_filtered %>%
+  mutate(
+    Home_Late_Goal = LateFH_Goal_Scored,
+    Away_Late_Goal = LateFH_Goal_Conceded,
+    Home_Goals_HT = Period1, # Assuming Period1 is Home Goals
+    Away_Goals_HT = Period2  # Assuming Period2 is Away Goals
+  )
+
+model <- multinom(
+    Match_Outcome ~ 
+        Home_Late_Goal + 
+        Away_Late_Goal +
+        Home_Goals_HT + 
+        Away_Goals_HT + 
+        Standard_League_Name,
+    data = df_model
+)
+
+cat("\n### Model AIC ###\n")
+print(model$AIC)
+```
+
+7.  Interpretation of Results We calculate Odds Ratios (OR) and P-values
+    to interpret the results.
+
+OR \> 1: Increases the likelihood of the outcome (relative to Draw).
+
+OR \< 1: Decreases the likelihood.
+
+P-value \< 0.05: Statistically significant.
+
+```{r}
+# Calculate Z-statistics and P-values
+z_stats <- summary(model)$coefficients / summary(model)$standard.errors
+p_values <- (1 - pnorm(abs(z_stats))) * 2
+
+# Calculate Odds Ratios
+odds_ratios <- exp(coef(model))
+
+print("--- Odds Ratios (Likelihood vs. Draw) ---")
+print(round(odds_ratios, 3))
+
+print("--- P-Values ---")
+print(round(p_values, 4))
+```
