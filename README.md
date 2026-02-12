@@ -9,8 +9,8 @@ Football commentators widely claim that scoring just before halftime creates a d
 
 This project aims to **separate the effect of goal timing from the effect of the scoreboard**, using statistical modeling and bias correction techniques.
 
-This was a **group project (4 members)**.  
-I was responsible for leading the full **R implementation**, including data transformation, feature engineering, model construction, and interpretation of results.
+This was a **group project**.  
+I was responsible for leading the **R implementation**, including data transformation, feature engineering, model construction, and interpretation of results.
 
 ---
 
