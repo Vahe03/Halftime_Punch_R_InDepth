@@ -113,3 +113,15 @@ The dataset is excluded due to confidentiality restrictions.
 All scripts reflect the complete analytical workflow used in the project.
 
 ---
+
+## 🔎 Final Conclusion
+
+After controlling for halftime score, league strength, and home advantage, 
+scoring in the late first-half window remains one of the strongest predictors of match outcome.
+
+A late goal nearly doubles the odds of winning (OR ≈ 1.88), confirming that timing has an independent statistical effect.
+
+Additionally, when scored at home, the probability of losing decreases by approximately 35%, 
+indicating that home advantage acts as a protective reinforcement rather than an offensive amplifier.
+
+The “Halftime Punch” is not just intuition — it is statistically supported.
